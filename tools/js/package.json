@@ -1,0 +1,10 @@
+{
+  "name": "code-review-js-tools",
+  "private": true,
+  "description": "ESLint used by the MCP analysis server for JavaScript review",
+  "dependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "eslint-plugin-security": "^3.0.0"
+  }
+}

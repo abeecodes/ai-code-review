@@ -1,0 +1,10 @@
+# Sandbox image for generated tests. Python + pytest, plus the Node binary for JavaScript reviews.
+# Build:  docker build -f Dockerfile.sandbox -t code-review-sandbox .
+FROM node:22-slim AS node
+
+FROM python:3.12-slim
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+RUN pip install --no-cache-dir pytest
+RUN useradd -m runner
+USER runner
+WORKDIR /work

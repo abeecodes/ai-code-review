@@ -1,0 +1,498 @@
+{
+ "sql_injection_concat.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "sqli",
+    "category": "injection",
+    "line": 2
+   }
+  ]
+ },
+ "sql_injection_fstring.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "sqli",
+    "category": "injection",
+    "line": 2
+   }
+  ]
+ },
+ "command_injection_os_system.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "cmdi",
+    "category": "injection",
+    "line": 5
+   }
+  ]
+ },
+ "command_injection_shell.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "cmdi",
+    "category": "injection",
+    "line": 6
+   }
+  ]
+ },
+ "eval_user_input.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "eval",
+    "category": "injection",
+    "line": 2
+   }
+  ]
+ },
+ "exec_dynamic.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "exec",
+    "category": "injection",
+    "line": 2
+   }
+  ]
+ },
+ "hardcoded_api_key.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "secret",
+    "category": "secrets",
+    "line": 1
+   }
+  ]
+ },
+ "hardcoded_db_password.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "secret",
+    "category": "secrets",
+    "line": 2
+   }
+  ]
+ },
+ "password_logging.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "logpw",
+    "category": "secrets",
+    "line": 7
+   }
+  ]
+ },
+ "division_by_zero_average.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "div0",
+    "category": "boundary",
+    "line": 2
+   }
+  ]
+ },
+ "off_by_one_loop.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "off1",
+    "category": "boundary",
+    "line": 3
+   }
+  ]
+ },
+ "off_by_one_slice.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "off1",
+    "category": "boundary",
+    "line": 2
+   }
+  ]
+ },
+ "none_not_handled.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "none",
+    "category": "boundary",
+    "line": 2
+   }
+  ]
+ },
+ "float_equality.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "float",
+    "category": "pitfall",
+    "line": 2
+   }
+  ]
+ },
+ "mutable_default.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "mutdef",
+    "category": "pitfall",
+    "line": 1
+   }
+  ]
+ },
+ "bare_except.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "bare",
+    "category": "pitfall",
+    "line": 4
+   }
+  ]
+ },
+ "file_not_closed.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "leak",
+    "category": "pitfall",
+    "line": 2
+   }
+  ]
+ },
+ "is_literal.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "islit",
+    "category": "pitfall",
+    "line": 2
+   }
+  ]
+ },
+ "negative_withdraw.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "negamt",
+    "category": "validation",
+    "line": 2
+   }
+  ]
+ },
+ "discount_unvalidated.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "pct",
+    "category": "validation",
+    "line": 2
+   }
+  ]
+ },
+ "path_traversal.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "traversal",
+    "category": "validation",
+    "line": 7
+   }
+  ]
+ },
+ "assert_validation.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "assert",
+    "category": "validation",
+    "line": 2
+   }
+  ]
+ },
+ "pickle_loads.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "pickle",
+    "category": "deserialization",
+    "line": 5
+   }
+  ]
+ },
+ "md5_password.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "md5",
+    "category": "crypto",
+    "line": 5
+   }
+  ]
+ },
+ "random_token.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "rnd",
+    "category": "crypto",
+    "line": 7
+   }
+  ]
+ },
+ "insecure_tempfile.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "mktemp",
+    "category": "crypto",
+    "line": 5
+   }
+  ]
+ },
+ "traceback_leak.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "leak",
+    "category": "errorhandling",
+    "line": 8
+   }
+  ]
+ },
+ "mutates_argument.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "mutarg",
+    "category": "errorhandling",
+    "line": 2
+   }
+  ]
+ },
+ "rw_inventory.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "inv_none",
+    "category": "boundary",
+    "line": 20
+   },
+   {
+    "id": "inv_sqli",
+    "category": "injection",
+    "line": 28
+   },
+   {
+    "id": "inv_div0",
+    "category": "boundary",
+    "line": 37
+   }
+  ]
+ },
+ "rw_text_utils.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "text_mut",
+    "category": "pitfall",
+    "line": 17
+   },
+   {
+    "id": "text_md5",
+    "category": "crypto",
+    "line": 25
+   }
+  ]
+ },
+ "rw_lru_cache.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "lru_off1",
+    "category": "boundary",
+    "line": 20
+   },
+   {
+    "id": "lru_pickle",
+    "category": "deserialization",
+    "line": 25
+   }
+  ]
+ },
+ "rw_sales_report.py": {
+  "language": "python",
+  "clean": false,
+  "defects": [
+   {
+    "id": "rep_empty",
+    "category": "boundary",
+    "line": 19
+   },
+   {
+    "id": "rep_traversal",
+    "category": "validation",
+    "line": 23
+   },
+   {
+    "id": "rep_div0",
+    "category": "boundary",
+    "line": 32
+   }
+  ]
+ },
+ "clean_sql_param.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "clean_literal_eval.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "clean_env_secret.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "clean_validated_withdraw.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "clean_safe_average.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "clean_safe_path.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "clean_with_open.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "clean_specific_except.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "clean_default_none.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "clean_secure_token.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "rw_clean_stack.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "rw_clean_config.py": {
+  "language": "python",
+  "clean": true,
+  "defects": []
+ },
+ "js_eval_input.js": {
+  "language": "javascript",
+  "clean": false,
+  "defects": [
+   {
+    "id": "js_eval",
+    "category": "injection",
+    "line": 2
+   }
+  ]
+ },
+ "js_command_injection.js": {
+  "language": "javascript",
+  "clean": false,
+  "defects": [
+   {
+    "id": "js_cmdi",
+    "category": "injection",
+    "line": 4
+   }
+  ]
+ },
+ "js_average_empty.js": {
+  "language": "javascript",
+  "clean": false,
+  "defects": [
+   {
+    "id": "js_avg",
+    "category": "boundary",
+    "line": 3
+   }
+  ]
+ },
+ "js_hardcoded_secret.js": {
+  "language": "javascript",
+  "clean": false,
+  "defects": [
+   {
+    "id": "js_secret",
+    "category": "secrets",
+    "line": 1
+   }
+  ]
+ },
+ "js_clean_sum.js": {
+  "language": "javascript",
+  "clean": true,
+  "defects": []
+ },
+ "js_clean_greeting.js": {
+  "language": "javascript",
+  "clean": true,
+  "defects": []
+ }
+}

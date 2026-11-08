@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Code Review</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c2230; --muted:#667085; --border:#dde1e8;
+          --red:#c62828; --red-bg:#fdecec; --amber:#b26a00; --amber-bg:#fff4e0; --green:#1b7f3b; --green-bg:#e8f6ec;
+          --accent:#2457d6; --code:#f0f2f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b2029; --text:#e6e9ef; --muted:#9aa3b2; --border:#2d3442;
+            --red:#ff7b7b; --red-bg:#3a1f22; --amber:#f0b45a; --amber-bg:#3a2e17; --green:#6fd08c; --green-bg:#1b3325;
+            --accent:#7fa2ff; --code:#252b37; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:17px; margin:0 0 10px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; }
+  textarea { width:100%; min-height:240px; font:13px/1.5 ui-monospace,Consolas,monospace; background:var(--code);
+             color:var(--text); border:1px solid var(--border); border-radius:8px; padding:10px; resize:vertical; tab-size:4; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-top:12px; }
+  label { color:var(--muted); font-size:13px; } select,input[type=text] { padding:6px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card); color:var(--text); }
+  button { padding:8px 16px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer; font-size:14px; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; }
+  button:disabled { opacity:.55; cursor:wait; }
+  pre { background:var(--code); border-radius:6px; padding:8px 10px; overflow-x:auto; margin:6px 0; font:12.5px/1.5 ui-monospace,Consolas,monospace; white-space:pre-wrap; }
+  .score { display:flex; gap:24px; align-items:center; flex-wrap:wrap; }
+  .big { font-size:40px; font-weight:700; line-height:1; } .muted { color:var(--muted); font-size:13px; }
+  .finding { border-left:5px solid var(--amber); background:var(--amber-bg); border-radius:8px; padding:10px 14px; margin:10px 0; }
+  .finding.confirmed { border-color:var(--red); background:var(--red-bg); }
+  .chip { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; font-weight:600; margin-right:6px; border:1px solid var(--border); background:var(--card); }
+  .chip.red { color:var(--red); } .chip.amber { color:var(--amber); } .chip.green { color:var(--green); }
+  table { border-collapse:collapse; width:100%; font-size:13px; } th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
+  .passed { color:var(--green); font-weight:600; } .failed,.error { color:var(--red); font-weight:600; } .timeout { color:var(--amber); font-weight:600; }
+  .warn { background:var(--amber-bg); border-radius:8px; padding:8px 12px; margin:6px 0; font-size:13px; }
+  .err { background:var(--red-bg); color:var(--red); border-radius:8px; padding:10px 12px; }
+  .hidden { display:none; }
+  @media print { body { background:#fff; color:#000; } #input, .no-print { display:none !important; } .card { break-inside:avoid; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>AI Code Review &amp; Test Generation</h1>
+  <p class="sub">Findings are marked <span class="chip red">confirmed</span> when a generated test fails on your code, and <span class="chip amber">suspected</span> otherwise.</p>
+
+  <section class="card" id="input">
+    <textarea id="code" spellcheck="false" placeholder="Paste Python or JavaScript code here…">def average(numbers):
+    return sum(numbers) / len(numbers)
+</textarea>
+    <div class="row">
+      <label>Language <select id="language"><option value="auto">auto-detect</option><option>python</option><option>javascript</option></select></label>
+      <label>Mode <select id="mode"><option value="full">full (tools + RAG + tests)</option><option value="llm_static">LLM + static tools</option><option value="llm_only">LLM only</option><option value="static_only">static tools only</option></select></label>
+      <label><input type="checkbox" id="fix" checked> verify a fix</label>
+      <label>File name (regression) <input type="text" id="file" placeholder="optional, e.g. utils.py" size="20"></label>
+      <button class="primary" id="go">Review code</button>
+      <span class="muted" id="status"></span>
+    </div>
+  </section>
+
+  <div id="out" class="hidden"></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let last = null, lastCode = "", timer = null;
+
+$("go").onclick = async () => {
+  const code = $("code").value;
+  if (!code.trim()) return;
+  const body = { code, mode: $("mode").value, language: $("language").value, verify_fix: $("fix").checked,
+                 file_name: $("file").value.trim() || null };
+  $("go").disabled = true; $("out").classList.add("hidden");
+  const t0 = Date.now();
+  timer = setInterval(() => $("status").textContent = `Reviewing… ${Math.round((Date.now()-t0)/1000)}s (local models can take minutes)`, 500);
+  try {
+    const res = await fetch("/review", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+    if (!res.ok) throw new Error((await res.text()).slice(0, 400));
+    last = await res.json(); lastCode = code; render(last);
+  } catch (e) {
+    $("out").innerHTML = `<div class="err">Request failed: ${esc(e.message)}</div>`; $("out").classList.remove("hidden");
+  } finally { clearInterval(timer); $("status").textContent = ""; $("go").disabled = false; }
+};
+
+function counts(obj) { return Object.entries(obj || {}).filter(([,v]) => v).map(([k,v]) => `${esc(k)}: ${v}`).join(" · ") || "–"; }
+
+function render(r) {
+  const fix = r.fix && r.fix.attempted ? r.fix : null;
+  let h = `<section class="card"><div class="score">
+      <div><div class="big">${r.quality_score}</div><div class="muted">quality score / 100</div></div>
+      ${fix ? `<div><div class="big">${fix.score_after}</div><div class="muted">after ${fix.verified ? "verified" : "unverified"} fix</div></div>` : ""}
+      <div style="flex:1;min-width:240px"><b>Summary</b><br>${esc(r.summary) || "<span class='muted'>No summary.</span>"}
+      <div class="muted">${esc(r.language)} · ${esc(r.mode)} · penalties: ${counts(r.score_breakdown)}</div></div>
+      <div class="no-print"><button id="md">Download Markdown</button> <button id="pdf">Print / Save as PDF</button></div></div></section>`;
+
+  h += `<section class="card"><h2>Findings (${r.findings.length})</h2>`;
+  if (!r.findings.length) h += `<div class="muted">No issues reported.</div>`;
+  for (const f of r.findings) {
+    const c = f.verdict === "confirmed";
+    h += `<div class="finding ${c ? "confirmed" : ""}">
+      <span class="chip ${c ? "red" : "amber"}">${esc(f.verdict)}</span><span class="chip">${esc(f.severity)}</span>
+      <span class="chip">${esc(f.category)}</span><b>line ${f.line ?? "?"}</b> · ${esc(f.title)} <span class="muted">(${esc(f.source)})</span>
+      ${f.snippet ? `<pre>${esc(f.snippet)}</pre>` : ""}
+      ${f.explanation ? `<div>${esc(f.explanation)}</div>` : ""}
+      ${f.failure_scenario ? `<div><b>Fails when:</b> ${esc(f.failure_scenario)}</div>` : ""}
+      ${f.fix ? `<div><b>Fix:</b> ${esc(f.fix)}</div>` : ""}</div>`;
+  }
+  h += `</section>`;
+
+  const tests = r.tests.filter(t => t.name !== "sandbox");
+  h += `<section class="card"><h2>Generated tests</h2>`;
+  if (tests.length) {
+    h += `<table><tr><th>Test</th><th>Finding</th><th>Category</th><th>Result</th><th>Message</th></tr>` +
+      tests.map(t => `<tr><td>${esc(t.name)}</td><td>${esc(t.finding_id || "–")}</td><td>${esc(t.category)}</td>
+        <td class="${esc(t.status)}">${esc(t.status)}</td><td class="muted">${esc(t.message)}</td></tr>`).join("") + `</table>
+      <p class="muted">Coverage by category: ${counts(r.test_coverage)}<br>Generation: ${counts(r.test_stats)}</p>`;
+  } else h += `<div class="muted">No tests were run${r.mode !== "full" ? " (this mode skips them)" : ""}.</div>`;
+  const sb = r.tests.find(t => t.name === "sandbox");
+  if (sb) h += `<div class="warn">Sandbox: ${esc(sb.status)} – ${esc(sb.message)}</div>`;
+  h += `</section>`;
+
+  if (fix) {
+    h += `<section class="card"><h2>Fix verification <span class="chip ${fix.verified ? "green" : "amber"}">${fix.verified ? "verified" : "not fully verified"}</span></h2>
+      <div>Tests before: ${counts(fix.before)} → after: ${counts(fix.after)}</div>
+      <div class="muted">Fixed: ${esc((fix.fixed_tests||[]).join(", ")) || "–"} · Still failing: ${esc((fix.still_failing||[]).join(", ")) || "–"} · Regressions: ${esc((fix.regressions||[]).join(", ")) || "–"} · Static issues ${fix.static_issues_before} → ${fix.static_issues_after}</div>
+      ${fix.reason ? `<div class="warn">${esc(fix.reason)}</div>` : ""}
+      ${fix.fixed_code ? `<pre>${esc(fix.fixed_code)}</pre><button class="no-print" id="copy">Copy fixed code</button>` : ""}</section>`;
+  }
+  const g = r.regression;
+  if (g) h += `<section class="card"><h2>Since last review</h2>Score ${g.score_previous} → ${g.score_now} ·
+      <span class="chip green">fixed ${g.fixed.length}</span><span class="chip red">new ${g.new.length}</span><span class="chip amber">still present ${g.persisting.length}</span></section>`;
+  if (r.warnings.length) h += `<section class="card">${r.warnings.map(w => `<div class="warn">${esc(w)}</div>`).join("")}</section>`;
+  h += `<p class="muted">Time per step (s): ${counts(r.timings)} · LLM usage: ${counts(r.usage)}</p>`;
+
+  $("out").innerHTML = h; $("out").classList.remove("hidden");
+  $("pdf").onclick = () => window.print();
+  $("md").onclick = async () => {
+    const res = await fetch("/report", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ review:last, code:lastCode }) });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([await res.text()], { type:"text/markdown" }));
+    a.download = "code-review-report.md"; a.click();
+  };
+  if ($("copy")) $("copy").onclick = () => navigator.clipboard.writeText(last.fix.fixed_code);
+}
+</script>
+</body>
+</html>
