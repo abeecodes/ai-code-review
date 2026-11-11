@@ -14,19 +14,42 @@ _ESLINT_SECURITY = {"no-eval", "no-implied-eval", "no-new-func"}
 _SEV = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
 
 
-def _run(cmd: list, code: str) -> str:
+class AnalyzerError(RuntimeError):
+    """A tool could not run. This is different from "the tool found nothing", and must not look like it."""
+
+
+def _note(errors, message: str):
+    if errors is not None:
+        errors.append(message)
+
+
+def _check_output(proc, name: str) -> str:
+    if proc.returncode not in (0, 1):  # bandit, ruff and eslint exit 1 when they report findings
+        raise AnalyzerError(f"{name} exited with code {proc.returncode}: {(proc.stderr or proc.stdout)[-200:].strip()}")
+    if not (proc.stdout or "").strip():  # e.g. "No module named bandit": exit 1 with nothing on stdout
+        raise AnalyzerError(f"{name} produced no output: {(proc.stderr or '')[-200:].strip() or 'tool not installed?'}")
+    return proc.stdout
+
+
+def _run(cmd: list, code: str, name: str) -> str:
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "target.py"
         path.write_text(code, encoding="utf-8")
-        proc = subprocess.run(cmd + [str(path)], capture_output=True, text=True, timeout=60)
-        return proc.stdout
+        try:
+            proc = subprocess.run(cmd + [str(path)], capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=60)
+        except subprocess.TimeoutExpired as e:
+            raise AnalyzerError(f"{name} timed out after 60s") from e
+        except FileNotFoundError as e:
+            raise AnalyzerError(f"{name} could not start: {e}") from e
+        return _check_output(proc, name)
 
 
-def run_bandit(code: str) -> list:
+def run_bandit(code: str, errors: list | None = None) -> list:
     try:
-        out = _run([sys.executable, "-m", "bandit", "-f", "json", "-q"], code)
-        data = json.loads(out or "{}")
-    except Exception:  # noqa: BLE001
+        data = json.loads(_run([sys.executable, "-m", "bandit", "-f", "json", "-q"], code, "bandit"))
+    except (AnalyzerError, json.JSONDecodeError) as e:
+        _note(errors, f"bandit: {e}")
         return []
     return [
         {
@@ -41,15 +64,13 @@ def run_bandit(code: str) -> list:
     ]
 
 
-def run_ruff(code: str) -> list:
+def run_ruff(code: str, errors: list | None = None) -> list:
     try:
-        out = _run(
+        data = json.loads(_run(
             [sys.executable, "-m", "ruff", "check", "--output-format", "json",
-             "--select", "F,B,E9,C90", "--isolated"],
-            code,
-        )
-        data = json.loads(out or "[]")
-    except Exception:  # noqa: BLE001
+             "--select", "F,B,E9,C90", "--isolated"], code, "ruff"))
+    except (AnalyzerError, json.JSONDecodeError) as e:
+        _note(errors, f"ruff: {e}")
         return []
     return [
         {
@@ -68,17 +89,23 @@ def eslint_available() -> bool:
     return ESLINT.exists()
 
 
-def run_eslint(code: str) -> list:
+def run_eslint(code: str, errors: list | None = None) -> list:
     """JavaScript analysis: ESLint (recommended + eslint-plugin-security). Needs `npm install` in tools/js."""
     if not eslint_available():
+        _note(errors, "eslint: not installed (run `npm install` in tools/js)")
         return []
     try:
         proc = subprocess.run(
             [settings.node_binary, str(ESLINT), "--stdin", "--stdin-filename", "target.js", "-f", "json"],
-            input=code, capture_output=True, text=True, cwd=str(JS_DIR), timeout=60,
+            input=code, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(JS_DIR),
+            timeout=60,
         )
-        data = json.loads(proc.stdout or "[]")
-    except Exception:  # noqa: BLE001
+        data = json.loads(_check_output(proc, "eslint"))
+    except subprocess.TimeoutExpired:
+        _note(errors, "eslint: timed out after 60s")
+        return []
+    except (AnalyzerError, json.JSONDecodeError, FileNotFoundError) as e:
+        _note(errors, f"eslint: {e}")
         return []
     out = []
     for file_result in data:
@@ -97,7 +124,9 @@ def run_eslint(code: str) -> list:
     return out
 
 
-def analyze(code: str, language: str = "python") -> list:
+def analyze(code: str, language: str = "python", errors: list | None = None) -> list:
+    """Run the analyzers for `language`. Tool failures are appended to `errors` (when given) instead of
+    being mistaken for a clean result."""
     if language == "javascript":
-        return run_eslint(code)
-    return run_bandit(code) + run_ruff(code)
+        return run_eslint(code, errors)
+    return run_bandit(code, errors) + run_ruff(code, errors)

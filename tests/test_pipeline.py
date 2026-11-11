@@ -42,7 +42,7 @@ async def test_retry_when_generated_tests_have_a_syntax_error(install_llm):
 
 async def test_retry_when_a_test_hangs(install_llm, monkeypatch):
     monkeypatch.setattr(settings, "per_test_timeout", 1)
-    hang = "import time, target\n\ndef test_f1_boundary_hang():\n    time.sleep(30)\n"
+    hang = "import time, target\n\ndef test_f1_boundary_hang():\n    time.sleep(30)\n    assert target.average([1]) == 1\n"
     install_llm(review=REVIEW, tests=[hang, GOOD_TESTS])
     res = await run_review(BUGGY, "full", "python", False)
     assert res["test_stats"]["timeouts"] == 1 and res["test_stats"]["retries"] == 1
@@ -87,3 +87,129 @@ async def test_response_cache_serves_identical_prompts(install_llm, monkeypatch)
     b = await complete_json("senior code reviewer", "same prompt")
     assert a == b == json.loads(json.dumps(REVIEW)) and fake.calls == ["review"]
     assert usage["llm_calls"] == 1 and usage["cache_hits"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Priority 1 Regression Tests: Real Collection Check & Execution Pipeline
+# ---------------------------------------------------------------------------
+import tempfile
+from pathlib import Path
+from app.sandbox.runner import collect_error
+
+
+def test_real_collect_error_succeeds_on_valid_code():
+    """Verify collect_error succeeds (returns None) on valid code and test suite."""
+    err = collect_error(BUGGY, GOOD_TESTS, "python")
+    assert err is None
+
+
+def test_real_collect_error_detects_unimportable_module():
+    """Verify collect_error catches tests importing nonexistent modules."""
+    bad_import = "import pytest, nonexistent_module_xyz_123\n\ndef test_f1():\n    assert True\n"
+    err = collect_error(BUGGY, bad_import, "python")
+    assert err is not None
+    assert "nonexistent_module_xyz_123" in err
+
+
+def test_real_collect_error_skips_javascript():
+    """JavaScript tests do not use pytest collect; collect_error returns None immediately."""
+    err = collect_error("function f() {}", "test('a', () => {})", "javascript")
+    assert err is None
+
+
+def test_collect_error_cleans_up_temporary_directory(monkeypatch):
+    """Verify that temporary files are cleaned up after collection."""
+    created_dirs = []
+    orig_td = tempfile.TemporaryDirectory
+
+    def tracking_td(*args, **kwargs):
+        td = orig_td(*args, **kwargs)
+        created_dirs.append(Path(td.name))
+        return td
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", tracking_td)
+    err = collect_error(BUGGY, GOOD_TESTS, "python")
+    assert err is None
+    assert len(created_dirs) == 1
+    assert not created_dirs[0].exists()
+
+
+async def test_collect_error_argument_forwarding(install_llm, monkeypatch):
+    """Verify the exact arguments passed to collect_error() during test_gen."""
+    import app.agent.nodes.test_gen as test_gen_mod
+
+    recorded_calls = []
+    real_collect = test_gen_mod.collect_error
+
+    def spy_collect_error(code, test_code, language="python"):
+        recorded_calls.append({"code": code, "test_code": test_code, "language": language})
+        return real_collect(code, test_code, language)
+
+    monkeypatch.setattr(test_gen_mod, "collect_error", spy_collect_error)
+    install_llm(review=REVIEW, tests=[GOOD_TESTS])
+    res = await run_review(BUGGY, "full", "python", False)
+
+    assert len(recorded_calls) == 1
+    call = recorded_calls[0]
+    assert call["code"] == BUGGY
+    assert call["test_code"] == GOOD_TESTS.strip()
+    assert call["language"] == "python"
+    assert res["test_stats"]["attempts"] == 1
+
+
+async def test_retry_exhaustion_when_both_candidates_fail_collection(install_llm):
+    """Verify retry exhaustion when both generated candidates fail collection."""
+    candidate1 = "import pytest, target, non_existent_pkg_1\n\ndef test_f1_broken(): pass\n"
+    candidate2 = "import pytest, target, non_existent_pkg_2\n\ndef test_f1_broken(): pass\n"
+    fake = install_llm(review=REVIEW, tests=[candidate1, candidate2])
+    res = await run_review(BUGGY, "full", "python", False)
+
+    st = res["test_stats"]
+    assert st["attempts"] == 2
+    assert st["retries"] == 1
+    assert res["test_code"] == ""
+    assert res["tests"] == []
+    assert any("fails to load" in w or "discarded after 2 attempts" in w for w in res["warnings"])
+    assert all(f.get("verdict") == "suspected" for f in res["findings"])
+    assert fake.calls.count("tests") == 2
+
+
+async def test_successfully_collected_tests_are_executed(install_llm):
+    """Verify that successfully collected tests are actually executed and findings robustly matched."""
+    fake = install_llm(review=REVIEW, tests=[GOOD_TESTS], fix=FIXED)
+    res = await run_review(BUGGY, "full", "python", False)
+
+    assert res["test_code"] == GOOD_TESTS.strip()
+    real_tests = [t for t in res["tests"] if t["name"] != "sandbox"]
+    assert len(real_tests) == 2
+
+    by_name = {t["name"]: t for t in real_tests}
+    assert "test_f1_normal_average" in by_name
+    assert by_name["test_f1_normal_average"]["status"] == "passed"
+    assert "test_f1_empty_list_raises_value_error" in by_name
+    assert by_name["test_f1_empty_list_raises_value_error"]["status"] in ("failed", "error")
+
+    # Robust matching by finding content (not assuming findings[0])
+    div0_findings = [f for f in res["findings"] if "division by zero" in f["title"].lower() or "empty" in f["title"].lower()]
+    assert len(div0_findings) >= 1
+    assert div0_findings[0]["verdict"] == "confirmed"
+    assert "failed or crashed" in div0_findings[0]["verdict_reason"]
+    assert fake.calls.count("tests") == 1
+
+
+async def test_retry_when_generated_tests_fail_real_collection_robust(install_llm):
+    """End-to-end regression: Candidate 1 fails real collection, Candidate 2 passes and confirms defect."""
+    bad_collection = "import pytest, target, non_existent_pkg_404\n\ndef test_f1_broken(): pass\n"
+    fake = install_llm(review=REVIEW, tests=[bad_collection, GOOD_TESTS], fix=FIXED)
+    res = await run_review(BUGGY, "full", "python", False)
+
+    st = res["test_stats"]
+    assert st["attempts"] == 2
+    assert st["retries"] == 1
+    assert fake.calls.count("tests") == 2
+
+    # Robust finding verification by content
+    div0_findings = [f for f in res["findings"] if "zero" in f["title"].lower() or "empty" in f["title"].lower()]
+    assert len(div0_findings) >= 1
+    assert div0_findings[0]["verdict"] == "confirmed"
+

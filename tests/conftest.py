@@ -14,6 +14,17 @@ def isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "llm_cache", False)
     monkeypatch.setattr(settings, "per_test_timeout", 3)
 
+@pytest.fixture
+def mock_collection_check(monkeypatch):
+    """Targeted fixture for tests that explicitly want to mock or bypass test collection."""
+    monkeypatch.setattr("app.agent.nodes.test_gen.collect_error", lambda *a, **k: None)
+
+
+@pytest.fixture
+def no_collection_check(mock_collection_check):
+    """Alias for backwards compatibility with tests requesting no_collection_check."""
+    return mock_collection_check
+
 
 class FakeLLM:
     """Routes by system prompt, so the real graph, retry loop and sandbox run end to end."""

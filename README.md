@@ -1,93 +1,110 @@
-# AI-Powered Code Review and Automated Test Case Generation
+# AI Code Review and Test Generation
 
-FastAPI + LangGraph + RAG (ChromaDB) + MCP (bandit / ruff / ESLint) + LLM, with a test generation and
-sandboxed execution module that **proves** findings, a **fix verifier**, an evaluation harness and a web page.
+An AI-assisted code reviewer that does more than guess. For each suspected bug it generates tests, runs them in a
+sandbox, and reports whether a test **confirmed** the defect. It also proposes a fix and checks it against the same tests.
 
-Structure follows the pattern of the public reference projects
-([Bisma474/github-code-review-agent](https://github.com/Bisma474/github-code-review-agent),
-[JayTheCoder77/rio](https://github.com/JayTheCoder77/rio)); the code is written from scratch. Cite both.
+Built with FastAPI, LangGraph, ChromaDB (RAG), an MCP tool server (bandit, ruff, ESLint) and any LLM provider
+(local Ollama, Groq, OpenAI or Anthropic).
 
-## Pipeline
+## Features
 
-```
-static_analysis (MCP) -> rag_retrieve -> llm_review -+-> aggregate                    (baseline modes / nothing to test)
-                                                     '-> test_gen <-+  retry once on syntax error,
-                                                            |       |  forbidden calls or a hanging test
-                                                         test_run --'
-                                                            |
-                                                       fix_verify -> aggregate
-```
-* **confirmed** = a generated test asserting the *correct* behaviour failed on your code; **suspected** = not reproduced.
-* **fix_verify**: the LLM proposes a corrected file and the *same* tests run on it. *Verified* only if at least one failing
-  test now passes, none of the originally failing tests still fails, and no previously passing test breaks.
-* Modes: `full`, `llm_static` (no RAG/tests), `llm_only`, `static_only` — the baselines for the evaluation.
+- **Line-level findings** with the exact source line, a failure scenario and a suggested fix.
+- **Confirmed vs. suspected.** A finding is confirmed only when a generated test fails or crashes on the code.
+- **Fix verification.** The corrected code is tested against the same tests. A fix counts as verified only if a failing
+  test now passes, none still fail, and no passing test breaks.
+- **Generated edge-case tests** for normal, boundary, empty, invalid-type and malicious inputs, with a retry when
+  the generated tests are invalid.
+- **Python and JavaScript** support.
+- **Regression mode.** Review the same file again and see which issues are new, fixed or still present.
+- **Web page** with colour-coded findings, a Markdown download and print-to-PDF.
+- **Evaluation harness** that compares four pipeline variants on a labelled benchmark.
 
-## Setup
+## Quick start
 
 ```bash
-python -m venv .venv && source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env                                      # Windows: copy .env.example .env
-(cd tools/js && npm install)                              # only for JavaScript reviews (Node 20+ / 22 LTS)
-uvicorn app.main:app --reload                             # open http://127.0.0.1:8000
+cp .env.example .env                                   # Windows: copy .env.example .env
+uvicorn app.main:app --reload                          # then open http://127.0.0.1:8000
 ```
-Free LLM: install Ollama and `ollama pull qwen2.5-coder:7b`, or use a Groq key (`LLM_PROVIDER=groq`).
-`pytest` runs 23 offline tests with a fake LLM (no key, no model needed).
 
-## Features and where they live
+The default LLM is [Ollama](https://ollama.com) with a free local model:
 
-| Feature | Where |
-|---|---|
-| Web page: paste code, colour-coded findings, tests, fix, regression, Markdown download, print to PDF | `web/index.html` (served at `/`) |
-| `POST /review` (`mode`, `language`, `verify_fix`, `file_name`) | `app/main.py` |
-| Regression mode: pass `file_name`; response shows new / fixed / still-present findings | `app/storage.py` |
-| `GET /stats` cost and speed from every run (time, tokens, cache hits, verdicts) | `app/storage.py` |
-| LLM response cache by prompt hash (`LLM_CACHE=true`) | `app/agent/llm.py` |
-| JavaScript via ESLint through the same MCP server; tests with `node --test` | `app/tools/analyzers.py`, `tools/js/` |
-| Per-test timeout, secrets scrubbed from test environment, Docker hardening | `app/sandbox/runner.py` |
-| `POST /report` Markdown report | `app/report.py` |
+```bash
+ollama pull qwen2.5-coder:7b
+```
+
+To use Groq's free tier instead, set `LLM_PROVIDER=groq` and `GROQ_API_KEY` in `.env`.
+
+Set the model with the provider-specific variable (`OLLAMA_MODEL`, `GROQ_MODEL`, ...). Avoid `LLM_MODEL` while
+switching providers: it applies to all of them, so a leftover Ollama name sent to Groq fails with "model not found".
+Settings are validated at start-up, so a typo such as `SANDBOX_MODE=dokcer` stops the app with a clear error instead
+of silently running tests unsandboxed. `GET /health` reports `sandbox_isolated` and `GET /health/llm` checks the
+model connection.
+
+JavaScript review needs Node.js and one extra step: `cd tools/js && npm install`.
+
+Run the offline tests (no API key or model needed):
+
+```bash
+python -m pytest
+```
 
 ## Evaluation
 
-Benchmark: 50 files (14 clean, 36 with 42 labelled defects across 8 categories; 4 realistic multi-defect modules;
-4 JavaScript). It is generated by `samples/build_benchmark.py` from sources with hidden `@bug` markers, so the
-**line number of every defect is recorded automatically**. Findings are matched to defects by line (±2).
+The benchmark has 50 files: 14 clean files and 36 with 42 labelled defects across 8 categories, plus JavaScript
+files. Each defect's line number is recorded when the benchmark is built, and findings are matched to defects by line.
 
 ```bash
-python -m eval.run_eval --modes static_only                              # no LLM, seconds
-python -m eval.run_eval --models groq:llama-3.3-70b-versatile --runs 3   # all four modes, 3 runs
-python -m eval.run_eval --models ollama:qwen2.5-coder:7b groq:llama-3.3-70b-versatile --runs 3   # two models
-python -m eval.run_eval --runs 1 --limit 10 --no-fix                     # quick trial
-python -m eval.run_eval --report-only                                    # rebuild eval/results.md
+python -m eval.run_eval --modes static_only              # no LLM, runs in seconds
+python -m eval.run_eval --runs 1 --limit 10 --no-fix     # quick trial with the configured model
 ```
-Reports precision / recall / F1 (mean ± std over runs), recall and test-confirmation per defect category,
-false alarms on clean files, tokens and seconds, test-generation quality (retries, syntax errors, timeouts, discarded
-tests, coverage per category) and fix-verification rate. Results append to `eval/raw_results.jsonl`, so an interrupted
-run **resumes**. **Time warning:** a local 7B model needs minutes per review in `full` mode; 50 files × 3 modes × 3 runs
-can take many hours. Use Groq for the full benchmark, or Ollama with `--runs 1 --limit N`.
 
-Measured here without any LLM (`static_only`): precision 88%, recall 50%, F1 64%, 0 false alarms on the 14 clean
-files; boundary defects 0% — the gap the LLM and tests should close.
+The evaluation reports precision, recall and F1, recall per defect category, false alarms on clean files, cost and
+time, test-generation quality, and fix-verification rate.
 
-**Real-world code:** the four `rw_*.py` modules are realistic but written for this project. To add genuine
-open-source files (check their licence and keep the notice), copy a small file into `SOURCES` in
-`samples/build_benchmark.py`, seed 1-3 bugs with `#@bug id category`, and re-run the builder.
+Without any LLM, the static tools alone reach 88% precision and 50% recall on the benchmark, with no false alarms on
+clean files. Boundary defects are missed entirely, which is the gap the LLM and generated tests are meant to close.
 
-## Sandbox isolation
+## Sandbox
+
+Generated tests run in a temporary directory with a per-test and whole-run timeout, and API keys are removed from
+their environment.
 
 ```bash
 python -m eval.sandbox_isolation --mode subprocess
-docker build -f Dockerfile.sandbox -t code-review-sandbox .
-python -m eval.sandbox_isolation --mode docker      # run both, with internet on, and compare
 ```
-Subprocess mode is **not** a security boundary (probe result: a test can write to host paths). Docker mode adds
-`--network none`, read-only root, dropped capabilities, pid/memory/CPU limits. **Docker mode and the JavaScript
-Docker image were not tested by the author** — run the probe and report what you actually observe.
 
-## Known limits (state them in your report)
-* Python and JavaScript only; one file per review; no auth.
-* A failing generated test can come from a wrong test, not a real bug; spot-check some.
-* The score is deterministic (severity weights) but only as good as the findings.
-* `score_after` assumes findings whose failing tests now pass are resolved; findings with no test stay.
-* ESLint does not catch every JS issue (e.g. command injection via `execSync`); the LLM covers some.
-* Windows: no resource limits in subprocess mode (memory bomb probe will show NOT CONTAINED).
+The subprocess mode is **not a security boundary**: a test can write to paths outside the sandbox. For stronger
+isolation, use the Docker mode, which runs with no network, a read-only root filesystem and limited resources.
+Both loading the generated tests (pytest collection, which imports the submitted code) and running them use the
+selected mode, and a timeout kills the whole process tree:
+
+```bash
+docker build -f Dockerfile.sandbox -t code-review-sandbox .
+python -m eval.sandbox_isolation --mode docker
+```
+
+## Limitations
+
+- Supports Python and JavaScript only. Each review covers one file.
+- A generated test can fail for the wrong reason, so a "confirmed" label is evidence, not proof. Spot-check important results.
+- The quality score uses fixed severity weights, so it is only as good as the findings behind it.
+- Resource limits in subprocess mode do not apply on Windows.
+- The Docker sandbox has not been validated across all platforms (mounted-directory permissions in particular).
+- Generated tests are rejected before they run if they have no assertions, forget `import pytest`, call functions that
+  do not exist, or cannot be linked to a finding. A test that is itself broken never confirms a defect, but a test with
+  a *wrong expectation* still can; this is why "confirmed" is evidence, not proof.
+- If static analyzers fail to run, the review carries a warning rather than reporting "no findings".
+- The LLM's severity and category labels are not verified.
+- The evaluation benchmark is small and was written for this project, except where noted in the benchmark builder.
+
+## Acknowledgements
+
+Structure follows the public reference projects
+[Bisma474/github-code-review-agent](https://github.com/Bisma474/github-code-review-agent) and
+[JayTheCoder77/rio](https://github.com/JayTheCoder77/rio). The code here is written from scratch.
+
+## Licence
+
+Add a licence before making the repository public.

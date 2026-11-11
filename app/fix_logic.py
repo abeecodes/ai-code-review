@@ -1,11 +1,18 @@
 """Fix verification: compare test outcomes before and after the proposed fix."""
-from app.scoring import failing_tests_by_finding, score_breakdown
+from app.scoring import failing_tests_by_finding, is_test_infrastructure_bug, score_breakdown
 
 _BAD = ("failed", "error")
 
 
-def _tests(results: list) -> dict:
-    return {r["name"]: r["status"] for r in results if r["name"] != "sandbox"}
+def _broken_tests(*result_lists) -> set:
+    """Tests that are themselves broken (before or after the fix). They prove nothing either way, so they must
+    neither confirm a defect nor block a correct fix."""
+    return {r["name"] for rs in result_lists for r in rs
+            if r["name"] != "sandbox" and r["status"] in _BAD and is_test_infrastructure_bug(r.get("message", ""))}
+
+
+def _tests(results: list, skip=frozenset()) -> dict:
+    return {r["name"]: r["status"] for r in results if r["name"] != "sandbox" and r["name"] not in skip}
 
 
 def _counts(results: list) -> dict:
@@ -17,8 +24,9 @@ def _counts(results: list) -> dict:
 
 def evaluate_fix(before: list, after: list, findings: list) -> dict:
     """A fix is VERIFIED only if at least one failing test now passes, none of the originally failing
-    tests still fails, and no test that used to pass has broken."""
-    b, a = _tests(before), _tests(after)
+    tests still fails, and no test that used to pass has broken. Broken tests are ignored."""
+    broken = _broken_tests(before, after)
+    b, a = _tests(before, broken), _tests(after, broken)
     fixed = [n for n, s in b.items() if s in _BAD and a.get(n) == "passed"]
     still = [n for n, s in b.items() if s in _BAD and a.get(n) != "passed"]
     regress = [n for n, s in b.items() if s == "passed" and a.get(n) != "passed"]
@@ -28,5 +36,6 @@ def evaluate_fix(before: list, after: list, findings: list) -> dict:
     score_before, _ = score_breakdown(findings)
     score_after, _ = score_breakdown([f for f in findings if f["id"] not in resolved])
     return {"verified": bool(fixed) and not still and not regress, "fixed_tests": fixed, "still_failing": still,
-            "regressions": regress, "resolved_findings": resolved, "before": _counts(before),
-            "after": _counts(after), "score_before": score_before, "score_after": score_after}
+            "regressions": regress, "resolved_findings": resolved, "ignored_broken_tests": sorted(broken),
+            "before": _counts(before), "after": _counts(after),
+            "score_before": score_before, "score_after": score_after}

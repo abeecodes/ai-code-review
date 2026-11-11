@@ -13,8 +13,11 @@ mcp = FastMCP("code-analysis")
 
 @mcp.tool()
 def analyze_code(code: str, language: str = "python") -> str:
-    """Analyse source code. language is 'python' (bandit + ruff) or 'javascript' (ESLint). Returns a JSON list."""
-    return json.dumps(analyze(code, language))
+    """Analyse source code. language is 'python' (bandit + ruff) or 'javascript' (ESLint).
+    Returns JSON: {"findings": [...], "errors": [...]} where errors lists tools that failed to run."""
+    errors: list = []
+    findings = analyze(code, language, errors)
+    return json.dumps({"findings": findings, "errors": errors})
 
 
 @mcp.tool()

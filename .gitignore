@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 eval/raw_results.jsonl
+eval/old_raw_results.jsonl
 eval/.isolation_leak.txt
 eval/results.md
 eval/results.csv
@@ -19,3 +20,7 @@ htmlcov/
 .idea/
 .vscode/
 *.pyc
+eval/diagnosis*.md
+eval/*.jsonl
+*.sqlite3
+.mypy_cache/

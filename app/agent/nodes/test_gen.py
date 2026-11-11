@@ -1,15 +1,21 @@
 """Generate tests for the reported findings. Rejected output (syntax error, forbidden calls) is retried
 once with feedback; the LangGraph loop in graph.py drives the retry."""
+import re
+
 from app.agent.llm import complete_json
-from app.agent.nodes.common import number_lines, timed
-from app.sandbox.runner import count_tests, is_blocked
-from app.tools.syntax import syntax_error
+from app.agent.nodes.common import as_text, number_lines, timed
+from app.sandbox.runner import collect_error, count_tests, is_blocked
+from app.scoring import is_testable
+from app.tools.syntax import validate_test_structure
 
 CATEGORY_RULES = """- Name every test test_<finding_id>_<category>_<short_description>, where category is one of:
   normal, boundary, empty, invalid_type, large_input, malicious.
   Examples: test_f2_empty_list_returns_zero, test_f1_boundary_single_item.
 - For each finding write 3-4 tests, including at least one "empty" or "boundary" edge case
-  and one "invalid_type" or "malicious" case where it applies."""
+  and one "invalid_type" or "malicious" case where it applies.
+- Each finding lists a "failing input". Write at least one test that calls the code with exactly that input.
+- Expected values come from the function's intent: its name, its docstring and common sense about correct
+  behaviour. Never copy the value the current code returns, because the current code may be the bug."""
 
 PY_SYSTEM = """You write pytest tests that check whether reported defects are real.
 Return ONLY a JSON object: {"test_code": "<full contents of test_target.py>"}
@@ -52,7 +58,7 @@ Rules:
 
 
 def new_stats() -> dict:
-    return {"attempts": 0, "syntax_errors": 0, "blocked": 0, "timeouts": 0, "retries": 0,
+    return {"attempts": 0, "syntax_errors": 0, "invalid_structure": 0, "blocked": 0, "timeouts": 0, "retries": 0,
             "discarded_unparseable": 0, "generated": 0}
 
 
@@ -66,37 +72,42 @@ async def test_gen_node(state):
     if attempt > 1:
         stats["retries"] += 1
 
-    findings = [f for f in state.get("findings", []) if f["severity"] != "info"][:8]
+    findings = [f for f in state.get("findings", []) if is_testable(f)][:8]
     listing = "\n".join(
         f"- {f['id']} (line {f['line']}, {f['category']}, {f['severity']}): {f['title']} -- {f['explanation']}"
+        f" | failing input: {f.get('failure_scenario') or 'unknown'}"
         for f in findings)
     user = f"CODE (module `target`):\n{number_lines(state['code'])}\n\nFINDINGS:\n{listing}"
-    if feedback:
+    if feedback and not feedback.startswith("LLM generation failed"):  # provider errors are not model feedback
         user += (f"\n\nYour previous test file was rejected: {feedback}\n"
                  "Write a corrected, complete test file that avoids this problem.")
 
     test_code, issue = "", ""
     try:
         data = await complete_json(PY_SYSTEM if language == "python" else JS_SYSTEM, user)
-        candidate = (data.get("test_code") or "").strip()
+        candidate = as_text(data.get("test_code") or data.get("test") or data.get("tests") or data.get("code")).strip()
+        candidate = re.sub(r"^```(?:python|javascript|js)?\s*|\s*```$", "", candidate, flags=re.M).strip()
         if not candidate:
             issue = "the test file was empty"
-        elif (err := syntax_error(candidate, language)):
-            issue = f"syntax error: {err}"
-            stats["syntax_errors"] += 1
-        elif language == "python" and "pytest." in candidate and "import pytest" not in candidate:
-            issue = "it uses pytest but does not import it; start the file with 'import pytest'"
-            stats["syntax_errors"] += 1
         elif (bad := is_blocked(candidate, language)):
             issue = f"it uses a forbidden call or module ({bad.strip()[:40]}); do not use it"
             stats["blocked"] += 1
+        elif (struct_err := validate_test_structure(candidate, state["code"], language, {f["id"] for f in findings})):
+            issue = struct_err
+            stats["syntax_errors" if struct_err.startswith("syntax error") else "invalid_structure"] += 1
+        elif (load_err := collect_error(state["code"], candidate, language)):
+            issue = (f"the test file fails to load with this error: {load_err[-250:]}. "
+                     "Fix the import or the error and keep every test.")
         else:
             test_code = candidate
         if issue and candidate:
             stats["discarded_unparseable"] += count_tests(candidate, language)
     except Exception as e:  # noqa: BLE001
-        return {"test_code": "", "test_issue": "", "test_attempt": attempt, "test_stats": stats,
-                "test_results": [], "warnings": [f"Test generation failed: {e}"]}
+        # Record the error as the issue so the graph retries (bounded by max_test_attempts) instead of silently
+        # skipping test generation.
+        msg = f"LLM generation failed: {str(e)[:200]}"
+        return {"test_code": "", "test_issue": msg, "test_attempt": attempt, "test_stats": stats,
+                "test_results": [], "warnings": [f"Test generation failed: {msg}"]}
 
     out = {"test_code": test_code, "test_issue": issue, "test_attempt": attempt, "test_stats": stats,
            "test_results": []}

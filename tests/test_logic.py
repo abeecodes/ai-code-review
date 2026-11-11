@@ -73,3 +73,33 @@ def test_regression_compare_and_markdown(tmp_path):
                                     "failure_scenario": "", "fix": ""}], "tests": [], "regression": c,
                       "warnings": [], "timings": {}, "usage": {}})
     assert "🔴 confirmed" in md and "Changes since last review" in md
+
+from app.agent.nodes.aggregate import aggregate_node
+from app.scoring import is_testable
+
+
+def test_only_behavioural_findings_are_testable():
+    assert is_testable({"severity": "medium", "category": "bug"})
+    assert is_testable({"severity": "high", "category": "security"})
+    assert not is_testable({"severity": "low", "category": "maintainability"})
+    assert not is_testable({"severity": "info", "category": "bug"})
+
+
+async def test_every_verdict_has_a_reason():
+    def f(fid, category, line):
+        return {"id": fid, "severity": "high" if category == "bug" else "low", "category": category,
+                "line": line, "title": fid, "snippet": "", "explanation": "", "source": "llm"}
+
+    findings = [f("f1", "bug", 2), f("f2", "maintainability", 2), f("f3", "bug", 3), f("f4", "bug", 4)]
+    tests = [
+        {"name": "test_f1_empty_x", "finding_id": "f1", "status": "failed", "category": "empty", "message": ""},
+        {"name": "test_f3_normal_x", "finding_id": "f3", "status": "passed", "category": "normal", "message": ""},
+        {"name": "test_f4_normal_x", "finding_id": "f4", "status": "timeout", "category": "normal", "message": ""},
+    ]
+    res = (await aggregate_node({"findings": findings, "test_results": tests}))["result"]
+    by_id = {x["id"]: x for x in res["findings"]}
+
+    assert by_id["f1"]["verdict"] == "confirmed" and "failed or crashed" in by_id["f1"]["verdict_reason"]
+    assert by_id["f2"]["verdict"] == "suspected" and "not tested" in by_id["f2"]["verdict_reason"]
+    assert by_id["f3"]["verdict"] == "suspected" and "not reproduced" in by_id["f3"]["verdict_reason"]
+    assert by_id["f4"]["verdict"] == "suspected" and "inconclusive" in by_id["f4"]["verdict_reason"]

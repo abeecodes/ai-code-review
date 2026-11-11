@@ -50,12 +50,6 @@ def _from_static(static: list, code: str) -> list:
             source=s.get("source", "static")).model_dump())
     return out
 
-_SOURCES = {"llm", "bandit", "ruff", "eslint"}
-
-
-def _source(value) -> str:
-    value = str(value or "llm").strip().lower()
-    return value if value in _SOURCES else "llm"
 
 @timed("llm_review")
 async def llm_review_node(state):
@@ -79,7 +73,11 @@ async def llm_review_node(state):
                 "quality_score": 0, "warnings": [f"LLM review failed: {e}"]}
 
     findings, warnings = [], []
-    for i, raw in enumerate(data.get("findings", []), 1):
+    raw_findings = data.get("findings")
+    if not isinstance(raw_findings, list):
+        warnings.append(f"The LLM did not return a list of findings (got {type(raw_findings).__name__}); none used.")
+        raw_findings = []
+    for i, raw in enumerate(raw_findings, 1):
         try:
             line = _to_int(raw.get("line"))
             findings.append(Finding(
@@ -87,10 +85,10 @@ async def llm_review_node(state):
                 severity=normalize_severity(raw.get("severity")),
                 category=str(raw.get("category", "bug")).lower(), title=raw["title"],
                 explanation=raw.get("explanation", ""), failure_scenario=raw.get("failure_scenario", ""),
-                fix=raw.get("fix", ""), source=_source(raw.get("source")),
+                fix=raw.get("fix", ""), source="llm",
             ).model_dump())
         except Exception:  # noqa: BLE001
             warnings.append(f"Skipped a malformed finding: {raw}")
     score = _to_int(data.get("quality_score")) or 0
-    return {"findings": findings, "summary": data.get("summary", ""),
+    return {"findings": findings, "summary": str(data.get("summary") or ""),
             "quality_score": max(0, min(100, score)), "warnings": warnings}

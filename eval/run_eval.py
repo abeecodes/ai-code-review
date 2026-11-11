@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from app.agent.graph import run_review
-from app.agent.llm import DEFAULT_MODELS
+from app.agent.llm import DEFAULT_MODELS, model_name, set_model
 from app.core.config import settings
 from app.rag.store import index_knowledge
 from eval import metrics
@@ -52,7 +52,7 @@ async def run_all(args, truth: dict):
 
     for spec in args.models:
         provider, model = parse_model(spec)
-        settings.llm_provider, settings.llm_model = provider, model
+        set_model(provider, model)  # also overrides provider-specific variables such as GROQ_MODEL
         model_id = f"{provider}:{model}"
         for mode in args.modes:
             runs = 1 if mode == "static_only" else args.runs  # no LLM involved: deterministic
@@ -161,7 +161,7 @@ def write_report(records: list, truth: dict, tol: int, out_path: Path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--models", nargs="+", default=[f"{settings.llm_provider}:{settings.llm_model}"],
+    ap.add_argument("--models", nargs="+", default=[f"{settings.llm_provider}:{model_name()}"],
                     help="provider:model, e.g. groq:llama-3.3-70b-versatile ollama:qwen2.5-coder:7b")
     ap.add_argument("--modes", nargs="+", default=MODE_ORDER, choices=MODE_ORDER)
     ap.add_argument("--runs", type=int, default=3, help="repeats per LLM mode (static_only runs once)")

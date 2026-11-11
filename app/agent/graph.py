@@ -21,10 +21,11 @@ from app.agent.nodes.test_gen import new_stats, test_gen_node
 from app.agent.nodes.test_run import test_run_node
 from app.agent.state import ReviewState
 from app.core.config import settings
+from app.scoring import is_testable
 
 
 def _route_after_review(state) -> str:
-    has_issues = any(f["severity"] != "info" for f in state.get("findings", []))
+    has_issues = any(is_testable(f) for f in state.get("findings", []))
     return "test_gen" if flags(state)["tests"] and has_issues else "aggregate"
 
 

@@ -2,6 +2,7 @@
 import json
 import re
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,13 +20,21 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 
+@contextmanager
 def _conn():
+    """Yield a connection that commits on success, rolls back on error, and is always CLOSED afterwards.
+    (`with sqlite3.connect(...)` alone only ends the transaction; it leaves the connection, and on Windows the
+    database file, open until garbage collection.)"""
     folder = Path(settings.data_dir)
     folder.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(folder / "reviews.db")
-    con.row_factory = sqlite3.Row
-    con.executescript(_SCHEMA)
-    return con
+    con = sqlite3.connect(folder / "reviews.db", timeout=10)
+    try:
+        con.row_factory = sqlite3.Row
+        con.executescript(_SCHEMA)
+        with con:
+            yield con
+    finally:
+        con.close()
 
 
 def _now() -> str:
@@ -50,11 +59,11 @@ def last_review(file_name: str):
     return {"id": row["id"], "created": row["created"], "result": json.loads(row["result_json"])}
 
 
-def history(file_name: str, limit: int = 20) -> list:
+def history(file_name: str, limit: int = 20, offset: int = 0) -> list:
     with _conn() as con:
         rows = con.execute(
-            "SELECT id, created, language, mode, score FROM reviews WHERE file_name = ? ORDER BY id DESC LIMIT ?",
-            (file_name, limit)).fetchall()
+            "SELECT id, created, language, mode, score FROM reviews WHERE file_name = ? "
+            "ORDER BY id DESC LIMIT ? OFFSET ?", (file_name, limit, offset)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -114,14 +123,28 @@ def _brief(f: dict) -> dict:
     return {k: f.get(k) for k in ("id", "title", "line", "severity", "snippet")}
 
 
+def _group(findings: list) -> dict:
+    """fingerprint -> findings. Two findings can share a fingerprint (same source line), so keep a list."""
+    groups = {}
+    for f in findings:
+        if f.get("severity") != "info":
+            groups.setdefault(_fingerprint(f), []).append(f)
+    return groups
+
+
 def compare(previous: dict, current: dict, previous_id: int, previous_at: str) -> dict:
     """Regression mode: which findings are new, fixed or still present since the last review."""
-    prev = {_fingerprint(f): f for f in previous.get("findings", []) if f.get("severity") != "info"}
-    cur = {_fingerprint(f): f for f in current.get("findings", []) if f.get("severity") != "info"}
+    prev, cur = _group(previous.get("findings", [])), _group(current.get("findings", []))
+    new, fixed, persisting = [], [], []
+    for key in list(cur) + [k for k in prev if k not in cur]:
+        p, c = prev.get(key, []), cur.get(key, [])
+        keep = min(len(p), len(c))      # pair them off; the surplus on either side is new or fixed
+        persisting += c[:keep]
+        new += c[keep:]
+        fixed += p[keep:]
     return {
         "previous_review_id": previous_id, "previous_at": previous_at,
         "score_previous": previous.get("quality_score", 0), "score_now": current.get("quality_score", 0),
-        "new": [_brief(f) for k, f in cur.items() if k not in prev],
-        "fixed": [_brief(f) for k, f in prev.items() if k not in cur],
-        "persisting": [_brief(f) for k, f in cur.items() if k in prev],
+        "new": [_brief(f) for f in new], "fixed": [_brief(f) for f in fixed],
+        "persisting": [_brief(f) for f in persisting],
     }

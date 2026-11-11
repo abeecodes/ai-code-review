@@ -9,6 +9,7 @@ SANDBOX_MODE=docker     : the same inside a container with no network, read-only
 """
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -128,15 +129,16 @@ def _parse_junit(path: Path) -> list:
         name = tc.get("name", "")
         failure, error = tc.find("failure"), tc.find("error")
         if failure is not None:
-            status, msg = "failed", failure.get("message") or ""
+            status, body = "failed", failure.text or failure.get("message") or ""
         elif error is not None:
-            status, msg = "error", error.get("message") or ""
+            status, body = "error", error.text or error.get("message") or ""
         else:
-            status, msg = "passed", ""
+            status, body = "passed", ""
+        msg = body.strip()
         if status != "passed" and ("per-test timeout" in msg or "timed out" in msg.lower()):
-            status = "timeout"  # inconclusive: the test hung, so it neither confirms nor clears the finding
+            status = "timeout"
         results.append({"name": name, "finding_id": _finding_id(name), "category": _category(name),
-                        "status": status, "message": msg[:300]})
+                        "status": status, "message": msg[-400:]})  # the end of a traceback holds the cause
     return results
 
 
@@ -146,15 +148,19 @@ def _ensure_exports(code: str) -> str:
         return code
     names = re.findall(r"^\s*(?:async\s+)?function\s+(\w+)", code, re.M)
     names += re.findall(r"^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:\(|function|\w+\s*=>)", code, re.M)
+    names += re.findall(r"^\s*class\s+(\w+)", code, re.M)
     names = list(dict.fromkeys(names))
     return code + (f"\nmodule.exports = {{ {', '.join(names)} }};\n" if names else "")
 
 
-def _command(language: str, tmp: str, container_name: str) -> list:
+def _command(language: str, tmp: str, container_name: str, collect_only: bool = False) -> list:
     docker = settings.sandbox_mode == "docker"
     if language == "javascript":
         inner = ["node" if docker else settings.node_binary, "--test", "--test-reporter=junit",
                  "--test-reporter-destination=report.xml", "test_target.js"]
+    elif collect_only:  # import the test file (and target.py) without running any test
+        inner = ["python" if docker else sys.executable, "-m", "pytest", "--collect-only", "-q",
+                 "-p", "no:cacheprovider", "test_target.py"]
     else:
         inner = ["python" if docker else sys.executable, "-m", "pytest", "-q", "--junitxml=report.xml",
                  "-p", "no:cacheprovider", "test_target.py"]
@@ -167,6 +173,89 @@ def _command(language: str, tmp: str, container_name: str) -> list:
             "-v", f"{tmp}:/work", "-w", "/work", settings.sandbox_image, *inner]
 
 
+def _kill_tree(proc: subprocess.Popen):
+    """Kill the process AND everything it started (a timeout must not leave grandchildren running)."""
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)  # the child leads its own session (start_new_session=True)
+        else:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+    except OSError:
+        proc.kill()
+
+
+def _run_capture(cmd: list, cwd: str, timeout: float, **kwargs) -> subprocess.CompletedProcess:
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+    else:
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            encoding="utf-8", errors="replace", **kwargs)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def _execute(language: str, tmp: str, collect_only: bool = False) -> subprocess.CompletedProcess:
+    """Run pytest / node inside `tmp` with the configured isolation (subprocess or Docker).
+    Collection and execution share this path, so Docker mode never runs submitted code on the host."""
+    container = f"cr-sandbox-{uuid.uuid4().hex[:8]}"
+    cmd = _command(language, tmp, container, collect_only)
+    kwargs = {}
+    if settings.sandbox_mode != "docker":
+        env = _clean_env()
+        env["PER_TEST_TIMEOUT"] = str(settings.per_test_timeout)
+        if language == "python":
+            env["PYTHONPATH"] = tmp
+            env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        kwargs["env"] = env
+        if os.name == "posix":
+            kwargs["preexec_fn"] = _limits(language)
+    timeout = min(30, settings.sandbox_timeout) if collect_only else settings.sandbox_timeout
+    try:
+        return _run_capture(cmd, tmp, timeout, **kwargs)
+    except subprocess.TimeoutExpired:
+        if settings.sandbox_mode == "docker":
+            subprocess.run(["docker", "kill", container], capture_output=True)
+        raise
+
+
+def _write_files(tmp: str, code: str, test_code: str, language: str):
+    tmp_path = Path(tmp)
+    if language == "javascript":
+        (tmp_path / "target.js").write_text(_ensure_exports(code), encoding="utf-8")
+        (tmp_path / "test_target.js").write_text(test_code, encoding="utf-8")
+    else:
+        (tmp_path / "target.py").write_text(code, encoding="utf-8")
+        (tmp_path / "test_target.py").write_text(test_code, encoding="utf-8")
+        (tmp_path / "conftest.py").write_text(CONFTEST, encoding="utf-8")
+
+
+def collect_error(code: str, test_code: str, language: str = "python"):
+    """None if pytest can load the generated file, otherwise the end of its error output.
+    Importing the test file imports the submitted code, so this runs in the same sandbox as the tests."""
+    if language != "python":
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_files(tmp, code, test_code, language)
+        try:
+            proc = _execute(language, tmp, collect_only=True)
+        except subprocess.TimeoutExpired:
+            return "loading the test file timed out"
+        except FileNotFoundError as e:
+            return f"sandbox could not start: {e}"
+    if proc.returncode in (0, 5):  # 5 = loaded but no tests, which count_tests already rejects
+        return None
+    return (proc.stdout + proc.stderr).strip()[-400:]
+
+
 def run_tests(code: str, test_code: str, language: str = "python", check_blocked: bool = True) -> list:
     """Run generated tests against `code`. Returns one dict per test, or a single 'sandbox' row on failure."""
     if check_blocked:
@@ -175,39 +264,15 @@ def run_tests(code: str, test_code: str, language: str = "python", check_blocked
             return _error(f"Generated tests were blocked: they use a disallowed module or call ({bad.strip()[:40]}).")
 
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        if language == "javascript":
-            (tmp_path / "target.js").write_text(_ensure_exports(code), encoding="utf-8")
-            (tmp_path / "test_target.js").write_text(test_code, encoding="utf-8")
-        else:
-            (tmp_path / "target.py").write_text(code, encoding="utf-8")
-            (tmp_path / "test_target.py").write_text(test_code, encoding="utf-8")
-            (tmp_path / "conftest.py").write_text(CONFTEST, encoding="utf-8")
-
-        container = f"cr-sandbox-{uuid.uuid4().hex[:8]}"
-        cmd = _command(language, tmp, container)
-        kwargs = {}
-        if settings.sandbox_mode != "docker":
-            env = _clean_env()
-            env["PER_TEST_TIMEOUT"] = str(settings.per_test_timeout)
-            if language == "python":
-                env["PYTHONPATH"] = tmp
-                env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-            kwargs["env"] = env
-            if os.name == "posix":
-                kwargs["preexec_fn"] = _limits(language)
-
+        _write_files(tmp, code, test_code, language)
         try:
-            proc = subprocess.run(cmd, cwd=tmp, capture_output=True, text=True,
-                                  timeout=settings.sandbox_timeout, **kwargs)
+            proc = _execute(language, tmp)
         except subprocess.TimeoutExpired:
-            if settings.sandbox_mode == "docker":
-                subprocess.run(["docker", "kill", container], capture_output=True)
             return _sandbox_row("timeout", f"Test run exceeded {settings.sandbox_timeout}s and was killed.")
         except FileNotFoundError as e:
             return _error(f"Sandbox could not start: {e}")
 
-        report = tmp_path / "report.xml"
+        report = Path(tmp) / "report.xml"
         if not report.exists():
             return _error(f"No report written (exit {proc.returncode}): {(proc.stdout + proc.stderr)[-300:]}")
         try:

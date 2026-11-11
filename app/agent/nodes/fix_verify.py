@@ -1,9 +1,10 @@
 """Ask the LLM for a fixed version of the code, then run the SAME tests on it."""
 import asyncio
+import re
 
 from app.agent.llm import complete_json
 from app.agent.modes import flags
-from app.agent.nodes.common import number_lines, timed
+from app.agent.nodes.common import as_text, number_lines, timed
 from app.fix_logic import evaluate_fix
 from app.sandbox.runner import run_tests
 from app.schemas import FixReport
@@ -45,7 +46,8 @@ async def fix_verify_node(state):
             data = await complete_json(SYSTEM, prompt)
         except Exception as e:  # noqa: BLE001
             return {"fix": FixReport(attempted=True, reason=f"Fix generation failed: {e}").model_dump()}
-        candidate = (data.get("fixed_code") or "").strip("\n")
+        candidate = as_text(data.get("fixed_code") or data.get("fix") or data.get("code")).strip("\n")
+        candidate = re.sub(r"^```(?:python|javascript|js)?\s*|\s*```$", "", candidate, flags=re.M).strip()
         if not candidate.strip():
             reason = "the fixed code was empty"
         elif candidate.strip() == code.strip():

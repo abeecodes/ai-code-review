@@ -1,17 +1,43 @@
 from app.agent.nodes.common import timed
 from app.schemas import ReviewResponse
-from app.scoring import ORDER, failing_tests_by_finding, score_breakdown
+from app.scoring import ORDER, failing_tests_by_finding, is_testable, score_breakdown
 
 
-@timed("aggregate")
+@timed("aggregate", fail_soft=False)
 async def aggregate_node(state):
     findings = [dict(f) for f in state.get("findings", [])]
     tests = state.get("test_results", [])
 
-    # A failing or crashing correct-behaviour test confirms the defect; otherwise it stays suspected.
     failing = failing_tests_by_finding(tests)
+    ran = {}
+    for t in tests:
+        if t.get("finding_id") and t["name"] != "sandbox":
+            ran.setdefault(t["finding_id"], []).append(t["status"])
+
+    sandbox_rows = [t for t in tests if t["name"] == "sandbox"]
     for f in findings:
-        f["verdict"] = "confirmed" if f["id"] in failing else "suspected"
+        if f["id"] in failing:
+            f["verdict"] = "confirmed"
+            f["verdict_reason"] = "a generated test failed or crashed on the code"
+        elif not is_testable(f):
+            f["verdict"] = "suspected"
+            f["verdict_reason"] = "not tested: this is a style or maintainability finding, not a behaviour"
+        elif sandbox_rows and f["id"] not in ran:
+            f["verdict"] = "suspected"
+            f["verdict_reason"] = f"tests could not run: {sandbox_rows[0]['message'][:120]}"
+        elif f["id"] in ran:
+            f["verdict"] = "suspected"
+            if set(ran[f["id"]]) == {"timeout"}:
+                f["verdict_reason"] = "tests timed out, so the result is inconclusive"
+            else:
+                f["verdict_reason"] = "generated tests passed on the code, so the defect was not reproduced"
+        elif state.get("test_stats", {}).get("attempts") and not tests:
+            f["verdict"] = "suspected"
+            f["verdict_reason"] = (f"generated tests were rejected as invalid after "
+                                   f"{state['test_stats']['attempts']} attempt(s), so none could be run")
+        else:
+            f["verdict"] = "suspected"
+            f["verdict_reason"] = "no test was generated for this finding"
 
     findings.sort(key=lambda f: (ORDER.get(f["severity"], 5), f.get("line") or 0))
     score, breakdown = score_breakdown(findings)

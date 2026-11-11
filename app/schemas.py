@@ -38,6 +38,7 @@ class Finding(BaseModel):
     fix: str = ""
     source: str = "llm"            # llm | bandit | ruff | eslint
     verdict: Optional[str] = None  # confirmed | suspected
+    verdict_reason: str = ""       # why the verdict was given, shown in the report
 
 
 class TestResult(BaseModel):
@@ -60,6 +61,7 @@ class FixReport(BaseModel):
     still_failing: list[str] = []
     regressions: list[str] = []
     resolved_findings: list[str] = []
+    ignored_broken_tests: list[str] = []   # tests that were themselves broken; they neither confirm nor block
     score_before: int = 0
     score_after: int = 0
     static_issues_before: int = 0
